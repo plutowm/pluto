@@ -2,16 +2,60 @@
 name = "Pluto"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+description = "A minimal, modular, pure-Wayland tiling compositor built on Smithay"
 
 [dependencies]
-tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
-bitflags = "2.2.1"
+tracing = "0.1.37"
+thiserror = "2.0"
+bitflags = "2.6"
+
+[dependencies.tracing-subscriber]
+version = "0.3.16"
+features = ["env-filter"]
 
 [dependencies.smithay]
 git = "https://github.com/Smithay/smithay"
+rev = "118e34ffc9b99854a2230c4805e1f37dc9029edb"
 default-features = false
-features = [
-    "backend_winit",
-    "wayland_frontend",
-    "desktop",
+
+[dependencies.smithay-drm-extras]
+git = "https://github.com/Smithay/smithay"
+rev = "118e34ffc9b99854a2230c4805e1f37dc9029edb"
+default-features = false
+optional = true
+
+[dependencies.xcursor]
+version = "0.3.3"
+optional = true
+
+[features]
+default = ["winit", "udev"]
+
+# Common protocol / desktop support, required by every backend.
+core = ["smithay/desktop", "smithay/wayland_frontend"]
+
+# Nested backend, useful for development inside another compositor.
+winit = [
+    "core",
+    "smithay/backend_winit",
+    "smithay/backend_egl",
+    "smithay/renderer_gl",
 ]
+
+# Real hardware backend: DRM/KMS outputs, libinput devices and a libseat session.
+udev = [
+    "core",
+    "dep:smithay-drm-extras",
+    "dep:xcursor",
+    "smithay/backend_drm",
+    "smithay/backend_gbm",
+    "smithay/backend_udev",
+    "smithay/backend_libinput",
+    "smithay/backend_egl",
+    "smithay/backend_session_libseat",
+    "smithay/renderer_gl",
+]
+
+[profile.release]
+lto = "thin"
