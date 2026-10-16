@@ -2,7 +2,7 @@
 
 use smithay::{
     backend::renderer::utils::on_commit_buffer_handler,
-    desktop::PopupKind,
+    desktop::{PopupKind, WindowSurfaceType, layer_map_for_output},
     reexports::wayland_server::{
         Client,
         protocol::{wl_buffer, wl_surface::WlSurface},
@@ -11,8 +11,9 @@ use smithay::{
         buffer::BufferHandler,
         compositor::{
             CompositorClientState, CompositorHandler, CompositorState, get_parent,
-            is_sync_subsurface,
+            is_sync_subsurface, with_states,
         },
+        shell::wlr_layer::LayerSurfaceData,
         shm::{ShmHandler, ShmState},
     },
 };
@@ -84,6 +85,37 @@ pub fn on_commit<B: Backend + 'static>(state: &mut Pluto<B>, surface: &WlSurface
                 }
             }
             PopupKind::InputMethod(_) => {}
+        }
+    }
+
+    // Layer surfaces are arranged and given their initial configure here, after
+    // the client has committed the anchor/size it wants, so the configure we
+    // send actually reflects the client's requested state.
+    if let Some(output) = state
+        .space
+        .outputs()
+        .find(|o| {
+            let map = layer_map_for_output(o);
+            map.layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)
+                .is_some()
+        })
+        .cloned()
+    {
+        let initial_configure_sent = with_states(surface, |states| {
+            states
+                .data_map
+                .get::<LayerSurfaceData>()
+                .map(|data| data.lock().unwrap().initial_configure_sent)
+        })
+        .unwrap_or(false);
+
+        let mut map = layer_map_for_output(&output);
+        map.arrange();
+
+        if !initial_configure_sent
+            && let Some(layer) = map.layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)
+        {
+            layer.layer_surface().send_configure();
         }
     }
 

@@ -8,6 +8,7 @@
 pub mod activation;
 pub mod compositor;
 pub mod data_device;
+pub mod layer_shell;
 pub mod output;
 pub mod seat;
 pub mod xdg_shell;
@@ -25,7 +26,10 @@ use smithay::{
         selection::{
             data_device::DataDeviceState, primary_selection::PrimarySelectionState,
         },
-        shell::xdg::{XdgShellState, decoration::XdgDecorationState},
+        shell::{
+            wlr_layer::WlrLayerShellState,
+            xdg::{XdgShellState, decoration::XdgDecorationState},
+        },
         shm::ShmState,
         viewporter::ViewporterState,
         xdg_activation::XdgActivationState,
@@ -39,6 +43,7 @@ pub struct Protocols {
     pub compositor: CompositorState,
     pub shm: ShmState,
     pub xdg_shell: XdgShellState,
+    pub layer_shell: WlrLayerShellState,
     pub output_manager: OutputManagerState,
     pub data_device: DataDeviceState,
     pub primary_selection: PrimarySelectionState,
@@ -67,6 +72,7 @@ impl Protocols {
                 ],
             ),
             xdg_shell: XdgShellState::new::<Pluto<B>>(dh),
+            layer_shell: WlrLayerShellState::new::<Pluto<B>>(dh),
             output_manager: OutputManagerState::new_with_xdg_output::<Pluto<B>>(dh),
             data_device: DataDeviceState::new::<Pluto<B>>(dh),
             primary_selection: PrimarySelectionState::new::<Pluto<B>>(dh),

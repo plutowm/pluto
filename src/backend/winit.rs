@@ -73,6 +73,7 @@ pub fn init(
                     None,
                     None,
                 );
+                smithay::desktop::layer_map_for_output(&output).arrange();
             }
             WinitEvent::Input(event) => state.process_input_event(event),
             WinitEvent::Redraw => {

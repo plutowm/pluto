@@ -5,12 +5,14 @@ use smithay::{
         AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputBackend, InputEvent,
         KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
     },
+    desktop::{LayerMap, LayerSurface, layer_map_for_output},
     input::{
         keyboard::{FilterResult, Keysym, ModifiersState},
         pointer::{AxisFrame, ButtonEvent, MotionEvent},
     },
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::{Logical, Point, SERIAL_COUNTER},
+    wayland::shell::wlr_layer::Layer,
 };
 
 use crate::{
@@ -120,16 +122,60 @@ impl<B: Backend + 'static> Pluto<B> {
             .unwrap_or(Action::None)
     }
 
+    /// The layer surface under `pos`, checking the top-most layers first.
+    fn layer_at(&self, pos: Point<f64, Logical>) -> Option<LayerSurface> {
+        let output = self.output_under(pos)?;
+        let output_geo = self.space.output_geometry(&output)?;
+        let local = pos - output_geo.loc.to_f64();
+        let map = layer_map_for_output(&output);
+        [Layer::Overlay, Layer::Top, Layer::Bottom, Layer::Background]
+            .into_iter()
+            .find_map(|layer| map.layer_under(layer, local).cloned())
+    }
+
     fn surface_under(&self, pos: Point<f64, Logical>) -> Option<(WlSurface, Point<f64, Logical>)> {
-        let (window, location) = self.window_under(pos)?;
-        let surface = window.toplevel()?.wl_surface().clone();
-        Some((surface, location))
+        let output = self.output_under(pos)?;
+        let output_geo = self.space.output_geometry(&output)?;
+        let local = pos - output_geo.loc.to_f64();
+
+        // Overlay and top layers sit above windows.
+        {
+            let map = layer_map_for_output(&output);
+            if let Some(hit) =
+                layer_surface_under(&map, [Layer::Overlay, Layer::Top], local, output_geo.loc)
+            {
+                return Some(hit);
+            }
+        }
+
+        if let Some((window, location)) = self.window_under(pos)
+            && let Some(surface) = window.toplevel().map(|t| t.wl_surface().clone())
+        {
+            return Some((surface, location));
+        }
+
+        // Background and bottom layers sit below windows.
+        {
+            let map = layer_map_for_output(&output);
+            if let Some(hit) =
+                layer_surface_under(&map, [Layer::Bottom, Layer::Background], local, output_geo.loc)
+            {
+                return Some(hit);
+            }
+        }
+
+        None
     }
 
     /// Focus-follows-mouse: move keyboard focus to whatever window is under the
     /// cursor. Windows behind the cursor keep focus while the cursor is over
     /// empty space, so typing isn't interrupted by briefly moving off a window.
+    /// A layer surface holding keyboard focus (e.g. a launcher) is never
+    /// stolen by hover.
     fn focus_under_cursor(&mut self, pos: Point<f64, Logical>) {
+        if self.focused_layer.is_some() {
+            return;
+        }
         if let Some((window, _)) = self.window_under(pos) {
             if self.focused_window.as_ref() != Some(&window) {
                 self.focus_window(Some(window));
@@ -188,7 +234,11 @@ impl<B: Backend + 'static> Pluto<B> {
 
         if ButtonState::Pressed == state {
             let pos = self.pointer.current_location();
-            if let Some((window, _)) = self.window_under(pos) {
+            if let Some(layer) = self.layer_at(pos) {
+                if layer.can_receive_keyboard_focus() {
+                    self.focus_layer(Some(layer));
+                }
+            } else if let Some((window, _)) = self.window_under(pos) {
                 self.focus_window(Some(window));
             }
         }
@@ -252,4 +302,22 @@ impl<B: Backend + 'static> Pluto<B> {
         pointer.axis(self, frame);
         pointer.frame(self);
     }
+}
+
+/// Find the layer surface under `local` (output-relative) within a set of
+/// layers, returning it and its location in desktop space.
+fn layer_surface_under(
+    map: &LayerMap,
+    layers: [Layer; 2],
+    local: Point<f64, Logical>,
+    output_loc: Point<i32, Logical>,
+) -> Option<(WlSurface, Point<f64, Logical>)> {
+    layers.into_iter().find_map(|layer| {
+        let layer_surface = map.layer_under(layer, local)?;
+        let geo = map.layer_geometry(layer_surface)?;
+        Some((
+            layer_surface.wl_surface().clone(),
+            (geo.loc + output_loc).to_f64(),
+        ))
+    })
 }

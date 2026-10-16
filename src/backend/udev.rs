@@ -514,6 +514,7 @@ impl Pluto<UdevData> {
         output.set_preferred(wl_mode);
         output.change_current_state(Some(wl_mode), Some(Transform::Normal), None, Some(position));
         self.space.map_output(&output, position);
+        smithay::desktop::layer_map_for_output(&output).arrange();
 
         output.user_data().insert_if_missing(|| UdevOutputId {
             crtc,

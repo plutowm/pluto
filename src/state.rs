@@ -18,7 +18,7 @@ use smithay::{
         RenderElementStates, default_primary_scanout_output_compare,
     },
     desktop::{
-        PopupManager, Space, Window,
+        LayerSurface, PopupManager, Space, Window, layer_map_for_output,
         utils::{
             OutputPresentationFeedback, surface_presentation_feedback_flags_from_states,
             surface_primary_scanout_output, update_surface_primary_scanout_output,
@@ -39,7 +39,7 @@ use smithay::{
             Resource,
         },
     },
-    utils::{Clock, Logical, Monotonic, Point},
+    utils::{Clock, Logical, Monotonic, Point, SERIAL_COUNTER},
     wayland::{
         compositor::{CompositorClientState, get_parent},
         fractional_scale::with_fractional_scale,
@@ -97,6 +97,8 @@ pub struct Pluto<B: Backend + 'static> {
     pub popups: PopupManager,
     pub tiling: TilingState,
     pub focused_window: Option<Window>,
+    /// The layer surface currently holding keyboard focus, if any.
+    pub focused_layer: Option<LayerSurface>,
 
     // Wayland protocol globals
     pub protocols: Protocols,
@@ -163,6 +165,7 @@ impl<B: Backend + 'static> Pluto<B> {
             popups: PopupManager::default(),
             tiling: TilingState::default(),
             focused_window: None,
+            focused_layer: None,
             protocols,
             seat_state,
             seat,
@@ -237,6 +240,7 @@ impl<B: Backend + 'static> Pluto<B> {
     pub fn focus_window(&mut self, window: Option<Window>) {
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
         self.focused_window = window.clone();
+        self.focused_layer = None;
 
         for w in self.space.elements() {
             let active = Some(w) == window.as_ref();
@@ -248,6 +252,22 @@ impl<B: Backend + 'static> Pluto<B> {
         }
 
         let surface = window.and_then(|w| w.toplevel().map(|t| t.wl_surface().clone()));
+        if let Some(keyboard) = self.seat.get_keyboard() {
+            keyboard.set_focus(self, surface, serial);
+        }
+    }
+
+    /// Give keyboard focus to a layer surface (e.g. a launcher), or clear it.
+    ///
+    /// Clearing does not restore window focus; callers decide what to focus
+    /// next (see the layer-destroyed handler).
+    pub fn focus_layer(&mut self, layer: Option<LayerSurface>) {
+        let serial = SERIAL_COUNTER.next_serial();
+        self.focused_layer = layer;
+        let surface = self
+            .focused_layer
+            .as_ref()
+            .map(|l| l.wl_surface().clone());
         if let Some(keyboard) = self.seat.get_keyboard() {
             keyboard.set_focus(self, surface, serial);
         }
@@ -268,6 +288,13 @@ pub fn send_frames<B: Backend + 'static>(
             window.send_frame(output, time, throttle, surface_primary_scanout_output);
         }
     });
+
+    {
+        let map = layer_map_for_output(output);
+        for layer in map.layers() {
+            layer.send_frame(output, time, throttle, surface_primary_scanout_output);
+        }
+    }
 
     state.space.refresh();
     state.popups.cleanup();
@@ -295,6 +322,22 @@ pub fn update_primary_scanout_output(
             );
         });
     });
+
+    {
+        let map = layer_map_for_output(output);
+        for layer in map.layers() {
+            layer.with_surfaces(|surface, states| {
+                update_surface_primary_scanout_output(
+                    surface,
+                    output,
+                    states,
+                    None,
+                    render_element_states,
+                    default_primary_scanout_output_compare,
+                );
+            });
+        }
+    }
 
     if let CursorImageStatus::Surface(surface) = cursor_status {
         smithay::desktop::utils::with_surfaces_surface_tree(surface, |surface, states| {
@@ -343,6 +386,19 @@ pub fn take_presentation_feedback(
         }
     });
 
+    {
+        let map = layer_map_for_output(output);
+        for layer in map.layers() {
+            layer.take_presentation_feedback(
+                &mut feedback,
+                surface_primary_scanout_output,
+                |surface, _| {
+                    surface_presentation_feedback_flags_from_states(surface, None, render_element_states)
+                },
+            );
+        }
+    }
+
     feedback
 }
 
@@ -361,6 +417,19 @@ pub fn post_repaint<B: Backend + 'static>(
             }
         });
     });
+
+    {
+        let map = layer_map_for_output(output);
+        for layer in map.layers() {
+            layer.with_surfaces(|surface, states| {
+                if let Some(o) = surface_primary_scanout_output(surface, states) {
+                    with_fractional_scale(states, |scale| {
+                        scale.set_preferred_scale(o.current_scale().fractional_scale());
+                    });
+                }
+            });
+        }
+    }
 
     send_frames(state, output, render_element_states);
 }
