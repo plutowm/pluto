@@ -74,6 +74,7 @@ pub fn init(
                     None,
                 );
                 smithay::desktop::layer_map_for_output(&output).arrange();
+                state.tiling.arrange(&mut state.space);
             }
             WinitEvent::Input(event) => state.process_input_event(event),
             WinitEvent::Redraw => {

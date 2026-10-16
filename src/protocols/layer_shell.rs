@@ -60,8 +60,15 @@ impl<B: Backend + 'static> WlrLayerShellHandler for Pluto<B> {
             return;
         };
 
+        let before = map.non_exclusive_zone();
         map.unmap_layer(&layer);
+        let zone_changed = map.non_exclusive_zone() != before;
         drop(map);
+
+        // A bar that reserved space went away: give the space back to windows.
+        if zone_changed {
+            self.tiling.arrange(&mut self.space);
+        }
 
         if self.focused_layer.as_ref() == Some(&layer) {
             self.focus_layer(None);

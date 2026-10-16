@@ -91,7 +91,7 @@ pub fn on_commit<B: Backend + 'static>(state: &mut Pluto<B>, surface: &WlSurface
     // Layer surfaces are arranged and given their initial configure here, after
     // the client has committed the anchor/size it wants, so the configure we
     // send actually reflects the client's requested state.
-    if let Some(output) = state
+    let layer_output = state
         .space
         .outputs()
         .find(|o| {
@@ -99,8 +99,9 @@ pub fn on_commit<B: Backend + 'static>(state: &mut Pluto<B>, surface: &WlSurface
             map.layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)
                 .is_some()
         })
-        .cloned()
-    {
+        .cloned();
+
+    if let Some(output) = layer_output {
         let initial_configure_sent = with_states(surface, |states| {
             states
                 .data_map
@@ -109,20 +110,31 @@ pub fn on_commit<B: Backend + 'static>(state: &mut Pluto<B>, surface: &WlSurface
         })
         .unwrap_or(false);
 
-        let mut map = layer_map_for_output(&output);
-        map.arrange();
+        let zone_changed = {
+            let mut map = layer_map_for_output(&output);
+            let before = map.non_exclusive_zone();
+            map.arrange();
 
-        if !initial_configure_sent
-            && let Some(layer) = map.layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)
-        {
-            layer.layer_surface().send_configure();
+            if !initial_configure_sent
+                && let Some(layer) = map.layer_for_surface(surface, WindowSurfaceType::TOPLEVEL)
+            {
+                layer.layer_surface().send_configure();
+            }
+
+            map.non_exclusive_zone() != before
+        };
+
+        // The reserved area changed (e.g. a bar appeared or resized), so the
+        // tiled windows must be re-laid-out around it.
+        if zone_changed {
+            state.tiling.arrange(&mut state.space);
         }
     }
 
     // If the client committed a size we did not ask for, re-assert the layout.
-    if let Some(window) = &maybe_window {
-        if state.tiling.size_changed(window) {
-            state.tiling.arrange(&mut state.space);
-        }
+    if let Some(window) = &maybe_window
+        && state.tiling.size_changed(window)
+    {
+        state.tiling.arrange(&mut state.space);
     }
 }

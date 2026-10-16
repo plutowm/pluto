@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 
 use smithay::{
-    desktop::{Space, Window},
+    desktop::{Space, Window, layer_map_for_output},
     output::Output,
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::{Logical, Rectangle, Size},
@@ -196,9 +196,17 @@ impl TilingState {
         let outputs: Vec<Output> = space.outputs().cloned().collect();
 
         for output in outputs {
-            let Some(area) = space.output_geometry(&output) else {
+            let Some(output_geo) = space.output_geometry(&output) else {
                 continue;
             };
+
+            // Leave room for layer surfaces that reserved an exclusive zone
+            // (bars, docks, ...). The zone is output-local.
+            let zone = layer_map_for_output(&output).non_exclusive_zone();
+            let area = Rectangle::new(output_geo.loc + zone.loc, zone.size);
+            if area.size.w <= 0 || area.size.h <= 0 {
+                continue;
+            }
 
             let windows: Vec<Window> = self
                 .stacks
